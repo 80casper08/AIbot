@@ -26,7 +26,7 @@ def get_synoptyk_weather(city):
         return f"🌤 Погода в {city.title()}:\n{description}\n🌡 Температура: {temp_now}"
     except Exception as e:
         logging.error(e)
-        return "⚠️ Не вдалося розпарсити сторінку. Можливо змінився HTML."
+        return "⚠️ Не вдалося розпарсити сторінку."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -45,5 +45,4 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("weather", weather))
-    print("Бот запущено...")
     app.run_polling()
