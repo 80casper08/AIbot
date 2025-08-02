@@ -1,50 +1,128 @@
+import asyncio
 import os
-import requests
-from bs4 import BeautifulSoup
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import random
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from dotenv import load_dotenv
 
-# Токен бота з оточення
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+load_dotenv()
 
-# Парсер погоди з sinoptik.ua
-def get_weather_synoptik(city: str) -> str:
-    city = city.strip().lower().replace(" ", "-")
-    url = f"https://sinoptik.ua/погода-{city}"
+TOKEN = os.getenv("BOT_TOKEN")
+bot = Bot(token=TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+# FSM
+class TestStates(StatesGroup):
+    waiting_for_answer = State()
 
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        return "Не вдалося отримати дані з sinoptik.ua. Перевірте назву міста."
+# Питання
+questions_data = {
+    "👀Hard Test👀": [
+        {"question": "Що таке ризик?", "answers": ["Ймовірність настання події", "Документ", "Каска"]},
+        {"question": "Що робити при пожежі?", "answers": ["Викликати 101", "Ховатися", "Бігти до машини"]},
+    ],
+    "🎭Загальні🎭": [
+        {"question": "Яка температура кипіння води?", "answers": ["100°C", "90°C", "80°C"]},
+        {"question": "Скільки днів у тижні?", "answers": ["7", "5", "10"]},
+    ],
+    "🧍‍♂️ОП🧍‍♂️": [
+        {"question": "Що таке інструктаж?", "answers": ["Навчання з безпеки", "Відпустка", "Обід"]},
+    ],
+    "🗿LEAN🗿": [
+        {"question": "Що таке кайзен?", "answers": ["Покращення", "Звітність", "Контроль"]},
+    ],
+    "🎲QR🎲": [
+        {"question": "Що таке QR-код?", "answers": ["Швидкий код доступу", "Формула", "Файл"]},
+    ]
+}
 
-    soup = BeautifulSoup(response.content, "html.parser")
+# Активні тести
+active_tests = {}
 
-    try:
-        city_name = soup.find("div", class_="tabs").find("h1").text.strip()
-        temperature = soup.find("p", class_="today-temp").text.strip()
-        description = soup.find("div", class_="description").text.strip()
-        return f"{city_name}\n🌡 {temperature}\n{description}"
-    except Exception as e:
-        return "Не вдалося розібрати сторінку. Можливо, змінився дизайн або назва міста неправильна."
+# Головна клавіатура
+menu_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧍‍♂️ОП🧍‍♂️")],
+        [KeyboardButton(text="🎭Загальні🎭")],
+        [KeyboardButton(text="🗿LEAN🗿")],
+        [KeyboardButton(text="🎲QR🎲")],
+        [KeyboardButton(text="👀Hard Test👀")],
+    ],
+    resize_keyboard=True
+)
 
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привіт! Введи назву міста українською, щоб отримати прогноз з sinoptik.ua.")
+# /start
+@dp.message(F.text == "/start")
+async def start(message: Message, state: FSMContext):
+    await state.clear()
+    active_tests[message.from_user.id] = None
+    await message.answer("Привіт! Оберіть розділ для проходження тесту:", reply_markup=menu_keyboard)
 
-# Обробка тексту
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city = update.message.text
-    weather_info = get_weather_synoptik(city)
-    await update.message.reply_text(weather_info)
+# Обробка вибору розділу
+@dp.message(F.text.in_(questions_data.keys()))
+async def handle_test_start(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    selected_test = message.text
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    current_test = active_tests.get(user_id)
+    if current_test and current_test != selected_test:
+        await message.answer("🔒 Завершіть попередній тест або натисніть /start для нового.")
+        return
+    elif current_test == selected_test:
+        await message.answer("✅ Ви вже проходите цей тест.")
+        return
+
+    active_tests[user_id] = selected_test
+    await state.set_state(TestStates.waiting_for_answer)
+    await state.update_data(test=selected_test, current_question=0, score=0)
+    await send_next_question(message, state)
+
+# Надсилання наступного питання
+async def send_next_question(message: Message, state: FSMContext):
+    data = await state.get_data()
+    questions = questions_data[data["test"]]
+    current = data["current_question"]
+
+    if current >= len(questions):
+        await message.answer(
+            f"🏁 Тест завершено!\nРезультат: {data['score']} з {len(questions)}",
+            reply_markup=menu_keyboard
+        )
+        await state.clear()
+        active_tests[message.from_user.id] = None
+        return
+
+    question_data = questions[current]
+    answers = question_data["answers"].copy()
+    random.shuffle(answers)
+
+    answer_keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=ans)] for ans in answers],
+        resize_keyboard=True
+    )
+    await message.answer(question_data["question"], reply_markup=answer_keyboard)
+
+# Обробка відповіді
+@dp.message(TestStates.waiting_for_answer)
+async def handle_answer(message: Message, state: FSMContext):
+    data = await state.get_data()
+    test = data["test"]
+    current = data["current_question"]
+    correct = questions_data[test][current]["answers"][0]
+
+    score = data["score"]
+    if message.text == correct:
+        score += 1
+
+    await state.update_data(current_question=current + 1, score=score)
+    await send_next_question(message, state)
+
+# Запуск
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
