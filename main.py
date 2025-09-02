@@ -4,7 +4,7 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 # --- Токен ---
-TOKEN = os.getenv("TOKEN")  # Тепер змінна середовища просто TOKEN
+TOKEN = os.getenv("TOKEN")  # Змінна середовища просто TOKEN
 if not TOKEN:
     raise ValueError("TOKEN не заданий у змінних середовища Render")
 
@@ -91,10 +91,10 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del user_state[chat_id]
 
 # --- Основна логіка ---
-async def main():
+if __name__ == "__main__":
     application = Application.builder().token(TOKEN).build()
 
-    # Додаємо всі хендлери
+    # Додаємо хендлери
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("quiz", quiz))
@@ -102,8 +102,5 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer))
 
     print("Bot is running...")
-    await application.run_polling()
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    # Синхронний запуск polling
+    application.run_polling()
