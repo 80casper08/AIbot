@@ -1,15 +1,24 @@
 import asyncio
 import random
+import requests
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from questions import questions  # імпортуємо твій список питань
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# --- Завантаження питань з GitHub ---
+GITHUB_URL = "https://raw.githubusercontent.com/твій_юзер/твій_репо/main/questions.py"
+
+resp = requests.get(GITHUB_URL)
+if resp.status_code == 200:
+    exec(resp.text)  # тепер у нас буде змінна questions із файлу
+else:
+    raise Exception("Не вдалося завантажити questions.py з GitHub")
 
 # --- Поточний стан ---
 user_data = {}
@@ -27,7 +36,8 @@ async def cmd_start(message: types.Message):
 async def start_quiz(message: types.Message):
     user_data[message.from_user.id] = {
         "question_index": 0,
-        "selected_options": []
+        "selected_options": [],
+        "temp_selected": set()
     }
     await send_question(message.from_user.id, message)
 
