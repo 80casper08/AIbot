@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import os
 
 # --- Імпорт локального файлу з питаннями ---
-from questions import questions.py
+from questions import questions
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
