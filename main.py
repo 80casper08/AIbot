@@ -8,8 +8,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from dotenv import load_dotenv
 import os
 
-# --- Імпорт локального файлу з питаннями ---
-from questions import questions
+# --- Імпорт файлу з питаннями ---
+from questions import questions  # приклад: questions = [{"text": "Питання?", "options": [("Варіант 1", True), ("Варіант 2", False)]}]
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -22,7 +22,7 @@ class QuizState(StatesGroup):
     selected_options = State()
     temp_selected = State()
 
-# --- Клавіатура ---
+# --- Клавіатура старту ---
 def main_keyboard():
     return types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="🚀 Почати")]],
@@ -47,38 +47,40 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.text == "🚀 Почати")
 async def start_quiz(message: types.Message, state: FSMContext):
-    questions = op_questions
+    questions_list = questions  # беремо всі питання
     await state.set_state(QuizState.question_index)
     await state.update_data(
         question_index=0,
         selected_options=[],
         temp_selected=set(),
-        questions=questions
+        questions=questions_list
     )
     log_result(message.from_user, started=True)
     await send_question(message, state)
 
-# --- Питання ---
+# --- Показ питання ---
 async def send_question(message_or_callback, state: FSMContext):
     data = await state.get_data()
-    questions = data["questions"]
+    questions_list = data["questions"]
     index = data["question_index"]
 
-    if index >= len(questions):
+    # Кінець тесту
+    if index >= len(questions_list):
         correct = 0
-        for i, q in enumerate(questions):
+        for i, q in enumerate(questions_list):
             correct_answers = {j for j, (_, is_correct) in enumerate(q["options"]) if is_correct}
             user_selected = set(data["selected_options"][i])
             if correct_answers == user_selected:
                 correct += 1
-        percent = round(correct / len(questions) * 100)
+        percent = round(correct / len(questions_list) * 100)
         log_result(message_or_callback.from_user, percent)
         await message_or_callback.answer(
-            f"📊 Тест завершено!\n✅ Правильних відповідей: {correct}/{len(questions)}\n📈 Успішність: {percent}%"
+            f"📊 Тест завершено!\n✅ Правильних відповідей: {correct}/{len(questions_list)}\n📈 Успішність: {percent}%"
         )
         return
 
-    question = questions[index]
+    # Питання
+    question = questions_list[index]
     text = question["text"]
     options = list(enumerate(question["options"]))
     random.shuffle(options)
@@ -88,6 +90,7 @@ async def send_question(message_or_callback, state: FSMContext):
         text=("✅ " if i in selected else "◻️ ") + label,
         callback_data=f"opt_{i}"
     )] for i, (label, _) in options]
+
     buttons.append([InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -96,7 +99,7 @@ async def send_question(message_or_callback, state: FSMContext):
     else:
         await message_or_callback.answer(text, reply_markup=keyboard)
 
-# --- Обробка вибору ---
+# --- Вибір відповіді ---
 @dp.callback_query(F.data.startswith("opt_"))
 async def toggle_option(callback: CallbackQuery, state: FSMContext):
     index = int(callback.data.split("_")[1])
@@ -106,6 +109,7 @@ async def toggle_option(callback: CallbackQuery, state: FSMContext):
     await state.update_data(temp_selected=selected)
     await send_question(callback, state)
 
+# --- Підтвердження відповіді ---
 @dp.callback_query(F.data == "confirm")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
