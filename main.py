@@ -1,153 +1,145 @@
+import asyncio
 import os
 import random
-from flask import Flask, request
-from dotenv import load_dotenv
-
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram.filters import Command
+from flask import Flask
+from threading import Thread
+from dotenv import load_dotenv
+from questions import questions  # Усі питання з одного файлу
 
-# --- Імпорт питань ---
-from questions import questions
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+@app.route("/ping")
+def ping():
+    return "OK", 200
+
+Thread(target=lambda: app.run(host="0.0.0.0", port=8080)).start()
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise Exception("TOKEN не задано в .env файлі!")
-
-WEBHOOK_PATH = f"/{TOKEN}"
-WEBHOOK_URL = f"https://dashboard.render.com/web/srv-d2rfh2qdbo4c73d95sag/deploys/dep-d2rfh32dbo4c73d95sm0?r=2025-09-02%4013%3A59%3A46%7E2025-09-02%4014%3A03%3A20{WEBHOOK_PATH}"  # Замінити на URL Render
-
-# --- Aiogram ---
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- Стани ---
+ADMIN_IDS = [710633503, 716119785]
+GROUP_ID = -1002786428793  
+PING_INTERVAL = 6 * 60 * 60 
+
 class QuizState(StatesGroup):
     question_index = State()
     selected_options = State()
     temp_selected = State()
+    current_message_id = State()
+    current_options = State()
 
-# --- Flask ---
-app = Flask(__name__)
 
-@app.route("/")
-def index():
-    return "Bot is running!"
-
-@app.route(WEBHOOK_PATH, methods=["POST"])
-async def webhook():
-    update = types.Update(**request.json)
-    await dp.process_update(update)
-    return "OK", 200
-
-# --- Логування ---
-def log_result(user: types.User, score=None, started=False):
-    with open("logs.txt", "a", encoding="utf-8") as f:
-        if started:
-            f.write(f"{user.full_name} | {user.id} | Розпочав тест\n")
-        else:
-            f.write(f"{user.full_name} | {user.id} | Завершив тест | {score}%\n")
-
-# --- Клавіатура старту ---
-def main_keyboard():
-    return types.ReplyKeyboardMarkup(
+# Стартова кнопка
+@dp.message(F.text == "/start")
+async def cmd_start(message: types.Message):
+    keyboard = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="🚀 Почати")]],
         resize_keyboard=True
     )
+    await message.answer("Привіт! Натисни 'Почати', щоб пройти тест.", reply_markup=keyboard)
 
-# --- /start ---
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "Привіт! Натисни кнопку, щоб розпочати тест:",
-        reply_markup=main_keyboard()
-    )
 
-# --- Почати квіз ---
-@dp.message(lambda m: m.text == "🚀 Почати")
+# Початок тесту
+@dp.message(F.text == "🚀 Почати")
 async def start_quiz(message: types.Message, state: FSMContext):
-    questions_list = questions
+    shuffled_questions = questions.copy()
+    random.shuffle(shuffled_questions)
+
     await state.set_state(QuizState.question_index)
     await state.update_data(
         question_index=0,
         selected_options=[],
         temp_selected=set(),
-        questions=questions_list
+        questions=shuffled_questions
     )
-    log_result(message.from_user, started=True)
-    await send_question(message, state)
+    await send_question(message.chat.id, state)
 
-# --- Відправка питання ---
-async def send_question(message_or_callback, state: FSMContext):
+
+async def send_question(chat_id, state: FSMContext):
     data = await state.get_data()
-    questions_list = data["questions"]
     index = data["question_index"]
+    questions_list = data["questions"]
 
     if index >= len(questions_list):
-        # Кінець тесту
+        selected_all = data.get("selected_options", [])
         correct = 0
         for i, q in enumerate(questions_list):
-            correct_answers = {j for j, (_, is_correct) in enumerate(q["options"]) if is_correct}
-            user_selected = set(data["selected_options"][i])
-            if correct_answers == user_selected:
+            correct_indices = {j for j, (_, ok) in enumerate(q["options"]) if ok}
+            user_selected = set(selected_all[i])
+            if correct_indices == user_selected:
                 correct += 1
         percent = round(correct / len(questions_list) * 100)
-        log_result(message_or_callback.from_user, percent)
-        await message_or_callback.answer(
-            f"📊 Тест завершено!\n✅ Правильних відповідей: {correct}/{len(questions_list)}\n📈 Успішність: {percent}%"
-        )
+        await bot.send_message(chat_id, f"📊 Результат тесту: {correct} з {len(questions_list)} ({percent}%)")
         return
 
     question = questions_list[index]
-    text = question["text"]
     options = list(enumerate(question["options"]))
     random.shuffle(options)
-    selected = data.get("temp_selected", set())
+    await state.update_data(current_options=options, temp_selected=set())
 
-    buttons = [[InlineKeyboardButton(
-        text=("✅ " if i in selected else "◻️ ") + label,
-        callback_data=f"opt_{i}"
-    )] for i, (label, _) in options]
+    buttons = [[InlineKeyboardButton(text="◻️ " + opt_text, callback_data=f"opt_{i}")] for i, (opt_text, _) in options]
     buttons.append([InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.message.edit_text(text, reply_markup=keyboard)
+    if "image" in question and question["image"]:
+        msg = await bot.send_photo(chat_id, photo=question["image"], caption=question["text"], reply_markup=keyboard)
     else:
-        await message_or_callback.answer(text, reply_markup=keyboard)
+        msg = await bot.send_message(chat_id, text=question["text"], reply_markup=keyboard)
 
-# --- Обробка вибору ---
-@dp.callback_query(lambda c: c.data.startswith("opt_"))
+    await state.update_data(current_message_id=msg.message_id)
+
+
+@dp.callback_query(F.data.startswith("opt_"))
 async def toggle_option(callback: CallbackQuery, state: FSMContext):
     index = int(callback.data.split("_")[1])
     data = await state.get_data()
     selected = data.get("temp_selected", set())
     selected.symmetric_difference_update({index})
     await state.update_data(temp_selected=selected)
-    await send_question(callback, state)
 
-@dp.callback_query(lambda c: c.data == "confirm")
+    options = data["current_options"]
+    buttons = [[InlineKeyboardButton(text=("✅ " if i in selected else "◻️ ") + text, callback_data=f"opt_{i}")] for i, (text, _) in options]
+    buttons.append([InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm")])
+    await bot.edit_message_reply_markup(
+        chat_id=callback.message.chat.id,
+        message_id=data["current_message_id"],
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@dp.callback_query(F.data == "confirm")
 async def confirm_answer(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = data.get("temp_selected", set())
     selected_options = data.get("selected_options", [])
     selected_options.append(list(selected))
-    await state.update_data(
-        selected_options=selected_options,
-        question_index=data["question_index"] + 1,
-        temp_selected=set()
-    )
-    await send_question(callback, state)
+    await state.update_data(selected_options=selected_options, question_index=data["question_index"] + 1, temp_selected=set())
+    await send_question(callback.message.chat.id, state)
 
-# --- Старт webhook ---
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
+
+async def send_ping():
+    while True:
+        try:
+            await bot.send_message(GROUP_ID, "✅ Я працююю! ✅")
+        except Exception as e:
+            print(f"❗ Помилка пінгу: {e}")
+        await asyncio.sleep(PING_INTERVAL)
+
+
+async def main():
+    asyncio.create_task(send_ping())
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(on_startup())
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    asyncio.run(main())
