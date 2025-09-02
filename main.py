@@ -2,28 +2,11 @@ import os
 import random
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from questions import QUIZ_QUESTIONS, INTERVIEW_QUESTIONS
 
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise ValueError("TOKEN не заданий у змінних середовища Render")
-
-QUIZ_QUESTIONS = [
-    {"question": "Якого кольору тепер буде стрічка для розмітки підлоги?",
-     "options": ["🟨 Жовта", "🟧 Помаранчева", "🟩 Зелена"],
-     "answer": "🟧 Помаранчева"},
-    {"question": "Де тимчасово залишиться жовта стрічка?",
-     "options": ["На складі", "На робочих місцях", "У коридорах"],
-     "answer": "На робочих місцях"}
-]
-
-INTERVIEW_QUESTIONS = [
-    {"question": "Що таке 5S?",
-     "options": ["Метод організації робочого місця", "Система оплати праці", "Вид обладнання"],
-     "answer": "Метод організації робочого місця"},
-    {"question": "Що робити, якщо план виробництва не виконується?",
-     "options": ["Ігнорувати", "Зібрати команду та шукати рішення", "Покарати працівників"],
-     "answer": "Зібрати команду та шукати рішення"}
-]
+    raise ValueError("TOKEN не заданий у змінних середовища")
 
 user_state = {}
 
@@ -38,13 +21,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = get_random_question()
     user_state[update.effective_chat.id] = question
     keyboard = [[opt] for opt in question["options"]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)  # видалили one_time_keyboard
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)  # клавіатура постійна
     await update.message.reply_text(question["question"], reply_markup=markup)
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in user_state:
         return
+
     question = user_state[chat_id]
     answer = update.message.text
 
@@ -57,7 +41,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_question = get_random_question()
     user_state[chat_id] = next_question
     keyboard = [[opt] for opt in next_question["options"]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)  # постійна клавіатура
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(next_question["question"], reply_markup=markup)
 
 if __name__ == "__main__":
