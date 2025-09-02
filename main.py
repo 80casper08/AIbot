@@ -1,82 +1,57 @@
-# main.py
-import os
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardRemove
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import asyncio
 import random
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from questions import QUIZ_QUESTIONS, INTERVIEW_QUESTIONS
 
-TOKEN = os.getenv("TOKEN")  # Твій токен бота у змінних середовища
+from questions import QUIZ_QUESTIONS  # твій файл з питаннями
 
-user_state = {}  # тут зберігатимемо поточне питання для кожного користувача
+TOKEN = "YOUR_BOT_TOKEN"
 
-# --- Хендлери ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Відправляє привітальне повідомлення та одразу рандомне питання"""
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(
-        "Привіт 👋 Я бот для навчання з 5S та підготовки до співбесіди!\n\n"
-        "Одразу почнемо з питання:"
-    )
-    await send_random_question(chat_id, update, context)
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
+# словник для збереження стану користувачів (яке питання показано)
+user_state = {}
 
-async def send_random_question(chat_id, update, context, quiz=True):
-    """Відправляє рандомне питання з QUIZ або INTERVIEW"""
-    questions_list = QUIZ_QUESTIONS if quiz else INTERVIEW_QUESTIONS
-    question = random.choice(questions_list)
-    user_state[chat_id] = question
+# функція для відправки питання
+async def send_question(user_id, chat_id):
+    question = random.choice(QUIZ_QUESTIONS)
+    user_state[user_id] = question  # зберігаємо поточне питання
+    keyboard = InlineKeyboardBuilder()
+    for opt in question["options"]:
+        keyboard.add(types.InlineKeyboardButton(text=opt, callback_data=opt))
+    await bot.send_message(chat_id, question["question"], reply_markup=keyboard.as_markup())
 
-    keyboard = [[opt] for opt in question["options"]]
-    markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    
-    # Відправляємо нове питання і зберігаємо повідомлення
-    msg = await update.message.reply_text(question["question"], reply_markup=markup)
-    user_state[chat_id]["message_id"] = msg.message_id
-
-
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробляє відповідь користувача"""
-    chat_id = update.effective_chat.id
-    if chat_id not in user_state:
-        return
-
-    question = user_state[chat_id]
-    answer = update.message.text
-
-    # Видаляємо попереднє питання
+# старт
+@dp.message(commands=["start"])
+async def cmd_start(message: types.Message):
+    # видаляємо попереднє повідомлення, якщо є
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=question["message_id"])
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
     except:
-        pass  # Якщо повідомлення вже видалено або немає прав, ігноруємо
+        pass
+    await send_question(message.from_user.id, message.chat.id)
 
-    # Відправляємо результат
-    if answer == question["answer"]:
-        await update.message.reply_text("✅ Правильно!", reply_markup=ReplyKeyboardRemove())
-    else:
-        await update.message.reply_text(f"❌ Неправильно. Правильна відповідь: {question['answer']}", reply_markup=ReplyKeyboardRemove())
+# обробка натискання на варіант відповіді
+@dp.callback_query()
+async def handle_answer(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    answer = callback.data
+    current_question = user_state.get(user_id)
 
-    # Відправляємо наступне питання
-    await send_random_question(chat_id, update, context)
+    if current_question:
+        if answer == current_question["answer"]:
+            text = f"✅ Правильно!"
+        else:
+            text = f"❌ Неправильно! Правильна відповідь: {current_question['answer']}"
 
+        # видаляємо старе питання
+        await bot.delete_message(chat_id=chat_id, message_id=callback.message.message_id)
 
-async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /quiz"""
-    await send_random_question(update.effective_chat.id, update, context, quiz=True)
+        # надсилаємо наступне питання
+        await send_question(user_id, chat_id)
 
-async def interview_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /interview"""
-    await send_random_question(update.effective_chat.id, update, context, quiz=False)
-
-
-if __name__ == "__main__":
-    # Створюємо Application
-    application = Application.builder().token(TOKEN).build()
-
-    # Додаємо хендлери
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("quiz", quiz_command))
-    application.add_handler(CommandHandler("interview", interview_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer))
-
-    # Запускаємо бот
-    application.run_polling()
+        # підтвердження callback
+        await callback.answer(text)
