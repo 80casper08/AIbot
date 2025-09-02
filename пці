@@ -1,0 +1,74 @@
+# main.py
+import os
+from flask import Flask, request
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Dispatcher, CommandHandler, CallbackQueryHandler, CallbackContext
+
+from questions import questions  # твій список питань
+
+TOKEN = os.environ.get("TOKEN")  # Задавай через Render secrets
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # https://your-app.onrender.com
+
+bot = Bot(token=TOKEN)
+app = Flask(__name__)
+
+# --- Dispatcher ---
+dispatcher = Dispatcher(bot, None, use_context=True)
+
+# --- Стан користувача ---
+user_data = {}
+
+# --- Функції ---
+def start(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    user_data[chat_id] = {"index": 0, "score": 0}
+    send_question(chat_id)
+
+def send_question(chat_id):
+    data = user_data[chat_id]
+    index = data["index"]
+    if index >= len(questions):
+        bot.send_message(chat_id, f"Тест завершено! Ваш бал: {data['score']}/{len(questions)}")
+        return
+
+    q = questions[index]
+    buttons = [[InlineKeyboardButton(opt[0], callback_data=str(i))] for i, opt in enumerate(q["options"])]
+    bot.send_message(chat_id, q["text"], reply_markup=InlineKeyboardMarkup(buttons))
+
+def button(update: Update, context: CallbackContext):
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    query.answer()
+    data = user_data[chat_id]
+    index = data["index"]
+    q = questions[index]
+
+    selected = int(query.data)
+    if q["options"][selected][1]:
+        data["score"] += 1
+
+    data["index"] += 1
+    send_question(chat_id)
+
+# --- Handlers ---
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CallbackQueryHandler(button))
+
+# --- Flask routes ---
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "Telegram bot is running!"
+
+# --- Запуск ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    # встановлюємо вебхук при старті
+    bot.delete_webhook()
+    bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+    app.run(host="0.0.0.0", port=port)
